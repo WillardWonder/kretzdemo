@@ -6,99 +6,136 @@
     <title>Kretz Field App</title>
     <link rel="manifest" href="/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS for Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { background-color: #0F172A; color: #F8FAFC; font-family: system-ui, -apple-system, sans-serif; }
         .kretz-gold { color: #E2B13C; }
         .btn-gold { background-color: #E2B13C; color: #0F172A; font-weight: bold; }
+        #map { height: 250px; width: 100%; border-radius: 0.75rem; }
     </style>
 </head>
-<body class="flex flex-col h-screen p-4">
-    <header class="mb-6 mt-4 text-center">
-        <h1 class="text-2xl font-bold kretz-gold uppercase tracking-wider">Kretz Land Co.</h1>
-        <p class="text-sm text-slate-400">Forester Intelligence Field Tool</p>
+<body class="flex flex-col h-screen p-4 overflow-y-auto">
+    <header class="mb-4 mt-2 text-center">
+        <h1 class="text-xl font-bold kretz-gold uppercase tracking-wider">Kretz Land Co.</h1>
+        <p class="text-xs text-slate-400">Interactive Field Scout & Valuation</p>
     </header>
 
-    <main class="flex-grow flex flex-col items-center">
-        <!-- Location Button -->
-        <button id="locateBtn" class="btn-gold w-full max-w-md py-4 rounded-lg shadow-lg text-lg mb-6 active:scale-95 transition-transform">
-            📍 Run Cross-Reference (Current Location)
+    <main class="flex-grow flex flex-col items-center max-w-md mx-auto w-full pb-6">
+        <!-- Interactive Map Container -->
+        <div class="w-full mb-4 border border-slate-700 rounded-xl overflow-hidden shadow-lg">
+            <div id="map"></div>
+        </div>
+        <p class="text-xs text-slate-400 mb-4 text-center">📍 Drag the pin anywhere on the map to inspect a parcel.</p>
+
+        <!-- Location Buttons -->
+        <button id="locateBtn" class="btn-gold w-full py-3 rounded-lg shadow-lg text-sm mb-4 active:scale-95 transition-transform">
+            🎯 Center on My GPS Location
         </button>
 
         <!-- Manual Override -->
-        <div class="w-full max-w-md flex gap-2 mb-6">
-            <input type="text" id="manualParcel" placeholder="Or enter Parcel ID manually" class="flex-grow p-3 rounded-lg bg-slate-800 border border-slate-600 text-white focus:outline-none focus:border-yellow-500">
-            <button id="manualBtn" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-4 rounded-lg">Go</button>
+        <div class="w-full flex gap-2 mb-4">
+            <input type="text" id="manualParcel" placeholder="Or enter Parcel ID manually" class="flex-grow p-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm focus:outline-none focus:border-yellow-500">
+            <button id="manualBtn" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 px-4 rounded-lg text-sm">Go</button>
         </div>
 
         <!-- Status & Results -->
-        <div id="status" class="text-slate-400 text-sm mb-4 h-6 text-center"></div>
+        <div id="status" class="text-slate-400 text-xs mb-3 h-5 text-center"></div>
         
-        <div id="resultCard" class="hidden w-full max-w-md bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-2xl">
-            <h2 class="text-xs font-bold text-slate-400 mb-2 uppercase border-b border-slate-700 pb-2">AI Valuation Output</h2>
-            <div id="resultContent" class="text-sm whitespace-pre-wrap"></div>
+        <div id="resultCard" class="hidden w-full bg-slate-800 border border-slate-700 rounded-xl p-4 shadow-2xl">
+            <h2 class="text-xs font-bold text-slate-400 mb-2 uppercase border-b border-slate-700 pb-2">Property Intelligence Card</h2>
+            <div id="resultContent" class="text-sm whitespace-pre-wrap leading-relaxed"></div>
         </div>
     </main>
 
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        const locateBtn = document.getElementById('locateBtn');
-        const manualBtn = document.getElementById('manualBtn');
+        // Initialize Map centered on Central Wisconsin (Wausau area default)
+        const map = L.map('map').setView([45.1054, -89.6300], 11);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // Add a Draggable Pin
+        const marker = L.marker([45.1054, -89.6300], { draggable: true }).addTo(map);
+
         const statusEl = document.getElementById('status');
         const resultCard = document.getElementById('resultCard');
         const resultContent = document.getElementById('resultContent');
 
-        // Step 1: Capture GPS & Query ArcGIS
-        locateBtn.addEventListener('click', () => {
-            statusEl.textContent = "Acquiring GPS coordinates...";
-            resultCard.classList.add('hidden');
+        // When pin is dragged and dropped, query that lat/long
+        marker.on('dragend', function (event) {
+            const position = marker.getLatLng();
+            queryLocation(position.lat, position.lng);
+        });
 
+        // Center on GPS
+        document.getElementById('locateBtn').addEventListener('click', () => {
             if (!navigator.geolocation) {
-                statusEl.textContent = "Geolocation is not supported by your browser.";
+                statusEl.textContent = "Geolocation not supported.";
                 return;
             }
-
-            navigator.geolocation.getCurrentPosition(async (position) => {
-                const { latitude, longitude } = position.coords;
-                statusEl.textContent = `Found location (${latitude.toFixed(4)}, ${longitude.toFixed(4)}). Querying state records...`;
-
-                const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${longitude},${latitude}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME&f=json`;
-
-                try {
-                    const response = await fetch(esriUrl);
-                    const data = await response.json();
-
-                    if (data.features && data.features.length > 0) {
-                        const parcelId = data.features[0].attributes.PARCELID;
-                        const county = data.features[0].attributes.CNTY_NAME;
-                        statusEl.textContent = `Parcel ${parcelId} identified in ${county} County. Running AI valuation...`;
-                        runAIValuation(parcelId, county);
-                    } else {
-                        statusEl.textContent = "No parcel boundary found at this location.";
-                    }
-                } catch (error) {
-                    statusEl.textContent = "Error querying Wisconsin State GIS.";
-                }
-            }, (error) => {
-                statusEl.textContent = "GPS Error: Please allow location access.";
+            statusEl.textContent = "Acquiring GPS...";
+            navigator.geolocation.getCurrentPosition((position) => {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                map.setView([lat, lng], 15);
+                marker.setLatLng([lat, lng]);
+                queryLocation(lat, lng);
+            }, () => {
+                statusEl.textContent = "Unable to retrieve your location.";
             });
         });
 
-        manualBtn.addEventListener('click', () => {
+        document.getElementById('manualBtn').addEventListener('click', () => {
             const parcelId = document.getElementById('manualParcel').value.trim();
-            if(parcelId) {
-                statusEl.textContent = `Running AI valuation for ${parcelId}...`;
+            if (parcelId) {
+                statusEl.textContent = `Analyzing Parcel ${parcelId}...`;
                 resultCard.classList.add('hidden');
-                runAIValuation(parcelId, "Unknown");
+                runAIValuation(parcelId, "Manual Search", null);
             }
         });
 
-        // Step 2: Send to Secure Backend
-        async function runAIValuation(parcelId, county) {
+        async function queryLocation(lat, lng) {
+            statusEl.textContent = "Querying state parcel records for dropped pin...";
+            resultCard.classList.add('hidden');
+
+            const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${lng},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME,TAXPAYNAME,SITE_ADDR&f=json`;
+
             try {
-                // Calls the serverless function running on Vercel
+                const response = await fetch(esriUrl);
+                const data = await response.json();
+
+                if (data.features && data.features.length > 0) {
+                    const attr = data.features[0].attributes;
+                    const parcelId = attr.PARCELID;
+                    const county = attr.CNTY_NAME || "Northwoods Region";
+                    const ownerName = attr.TAXPAYNAME || "Private Landowner";
+                    
+                    statusEl.textContent = `Parcel identified. Running evaluation...`;
+                    runAIValuation(parcelId, county, ownerName);
+                } else {
+                    // Graceful handling for non-parcel locations (campuses, parks, roads)
+                    statusEl.textContent = "Location is outside private parcel boundaries.";
+                    resultContent.textContent = "NOTICE: The selected pin is on public, institutional, or unmapped land. Move the map pin onto a private woodland parcel to generate timber intelligence.";
+                    resultCard.classList.remove('hidden');
+                }
+            } catch (error) {
+                statusEl.textContent = "GIS lookup failed.";
+                resultContent.textContent = "ERROR: Could not connect to Wisconsin State GIS service.";
+                resultCard.classList.remove('hidden');
+            }
+        }
+
+        async function runAIValuation(parcelId, county, ownerName) {
+            try {
                 const response = await fetch('/api/evaluate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ parcelId, county })
+                    body: JSON.stringify({ parcelId, county, ownerName })
                 });
                 
                 const data = await response.json();
@@ -106,7 +143,7 @@
                 resultContent.textContent = data.result;
                 resultCard.classList.remove('hidden');
             } catch (error) {
-                statusEl.textContent = "Error running AI valuation.";
+                statusEl.textContent = "Error generating valuation.";
             }
         }
     </script>

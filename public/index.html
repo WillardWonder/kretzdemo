@@ -180,6 +180,24 @@ function classText(v, table) {
 function auxCodes(p) {
     return isBlank(p.AUXCLASS) ? [] : String(p.AUXCLASS).split(/[,;]/).map(s => s.trim().toUpperCase());
 }
+// Geodesic polygon area (same method as turf.js), in acres.
+function geometryAcres(g) {
+    if (!g) return null;
+    const R = 6371008.8, rad = (d) => d * Math.PI / 180;
+    const ringArea = (r) => {
+        let a = 0;
+        for (let i = 0; i < r.length; i++) {
+            const p1 = r[i], p2 = r[(i + 1) % r.length], p3 = r[(i + 2) % r.length];
+            a += (rad(p3[0]) - rad(p1[0])) * Math.sin(rad(p2[1]));
+        }
+        return Math.abs(a * R * R / 2);
+    };
+    const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+    if (!polys.length) return null;
+    const m2 = polys.reduce((sum, [outer, ...holes]) => sum + ringArea(outer) - holes.reduce((h, r) => h + ringArea(r), 0), 0);
+    return m2 / 4046.8564224;
+}
+
 function metersToDegrees(lat, meters) {
     return { dLat: meters / 111320, dLng: meters / (111320 * Math.cos(lat * Math.PI / 180)) };
 }
@@ -428,6 +446,8 @@ function showParcel(feature, { accuracy = null, others = [], zoom = false } = {}
 
     dl = section(c, 'Land');
     fact(dl, 'GIS acres', acres(p.GISACRES));
+    const calcAcres = geometryAcres(feature.geometry);
+    if (calcAcres !== null) fact(dl, 'Boundary acres (calculated)', acres(calcAcres));
     fact(dl, 'Deed acres', acres(p.DEEDACRES));
     fact(dl, 'Assessed acres', acres(p.ASSDACRES));
     fact(dl, 'Property class', classText(p.PROPCLASS, PROP_CLASS));

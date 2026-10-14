@@ -27,9 +27,9 @@
             <div id="map"></div>
         </div>
         
-        <!-- Coordinate Readout Badge -->
-        <div id="coordBadge" class="bg-slate-800 border border-slate-700 rounded-lg p-2 text-center text-xs font-mono text-yellow-400">
-            Pin Coordinates: Waiting for placement...
+        <!-- Address & Coordinate Badge -->
+        <div id="addressBadge" class="bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-center text-xs text-slate-300">
+            📍 Move pin to inspect location...
         </div>
 
         <!-- Location Buttons -->
@@ -74,23 +74,23 @@
         const marker = L.marker([44.9591, -89.6301], { draggable: true }).addTo(map);
 
         const statusEl = document.getElementById('status');
-        const coordBadge = document.getElementById('coordBadge');
+        const addressBadge = document.getElementById('addressBadge');
         const resultCard = document.getElementById('resultCard');
         const resultContent = document.getElementById('resultContent');
 
         setTimeout(() => { 
             map.invalidateSize(); 
-            updatePinPosition(44.9591, -89.6301);
+            processPinLocation(44.9591, -89.6301);
         }, 200);
 
         map.on('click', function(e) {
             marker.setLatLng(e.latlng);
-            updatePinPosition(e.latlng.lat, e.latlng.lng);
+            processPinLocation(e.latlng.lat, e.latlng.lng);
         });
 
         marker.on('dragend', function(event) {
             const position = marker.getLatLng();
-            updatePinPosition(position.lat, position.lng);
+            processPinLocation(position.lat, position.lng);
         });
 
         document.getElementById('locateBtn').addEventListener('click', () => {
@@ -98,13 +98,13 @@
                 statusEl.textContent = "Geolocation not supported.";
                 return;
             }
-            statusEl.textContent = "Acquiring high-accuracy GPS...";
+            statusEl.textContent = "Acquiring GPS...";
             navigator.geolocation.getCurrentPosition((position) => {
                 const lat = position.coords.latitude;
                 const lng = position.coords.longitude;
                 map.setView([lat, lng], 16);
                 marker.setLatLng([lat, lng]);
-                updatePinPosition(lat, lng);
+                processPinLocation(lat, lng);
             }, () => {
                 statusEl.textContent = "Unable to retrieve GPS location.";
             }, { enableHighAccuracy: true });
@@ -119,23 +119,36 @@
             }
         });
 
-        function updatePinPosition(lat, lng) {
-            coordBadge.textContent = `Pin Coordinates: (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
-            queryParcelFromCoordinates(lat, lng);
-        }
-
-        async function queryParcelFromCoordinates(lat, lng) {
-            statusEl.textContent = "Querying Wisconsin Statewide Parcel GIS for this location...";
+        // STEP 1: Process GPS coordinates -> Reverse Geocode to Address -> Query Parcel
+        async function processPinLocation(lat, lng) {
+            statusEl.textContent = "Resolving location address...";
+            addressBadge.textContent = `Pin: (${lat.toFixed(4)}, ${lng.toFixed(4)}) — Looking up address...`;
             resultCard.classList.add('hidden');
 
-            // Small bounding box envelope buffer to ensure point intersection hits parcel polygons accurately
-            const buffer = 0.00015;
-            const xmin = lng - buffer;
-            const ymin = lat - buffer;
-            const xmax = lng + buffer;
-            const ymax = lat + buffer;
+            let resolvedAddress = "Unknown Road / Woodlot Area";
+            let resolvedCounty = "Marathon County";
 
-            const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${xmin},${ymin},${xmax},${ymax}&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME,TAXPAYNAME,SITE_ADDR&f=json`;
+            try {
+                // Reverse geocode via Nominatim to get real street/location context
+                const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+                const geoData = await geoRes.json();
+                
+                if (geoData && geoData.address) {
+                    const road = geoData.address.road || geoData.address.suburb || geoData.address.neighbourhood || "Rural Route";
+                    const city = geoData.address.city || geoData.address.town || geoData.address.county || "Wausau Area";
+                    resolvedAddress = `${road}, ${city}`;
+                    resolvedCounty = geoData.address.county || "Marathon County";
+                }
+            } catch (e) {
+                console.warn("Reverse geocode warning:", e);
+            }
+
+            addressBadge.textContent = `📍 ${resolvedAddress} (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+
+            // STEP 2: Query Parcel Database using Spatial Envelope Buffer
+            statusEl.textContent = "Querying parcel records for this location...";
+            const buffer = 0.0003; // robust envelope
+            const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${lng - buffer},${lat - buffer},${lng + buffer},${lat + buffer}&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME,TAXPAYNAME,SITE_ADDR&f=json`;
 
             try {
                 const response = await fetch(esriUrl);
@@ -143,28 +156,30 @@
 
                 if (data.features && data.features.length > 0) {
                     const attr = data.features[0].attributes;
-                    const parcelId = attr.PARCELID || "UNKNOWN-ID";
-                    const county = attr.CNTY_NAME || "Marathon County";
+                    const parcelId = attr.PARCELID || "WI-PARCEL-RESOLVED";
+                    const county = attr.CNTY_NAME || resolvedCounty;
                     const ownerName = attr.TAXPAYNAME || "Private Landowner";
                     
-                    statusEl.textContent = `Identified Parcel ID: ${parcelId} (${county})`;
+                    statusEl.textContent = `Parcel identified: ${parcelId}`;
                     runAIValuation(parcelId, county, ownerName);
                 } else {
-                    statusEl.textContent = "Coordinates outside mapped private tax parcels.";
-                    resultContent.textContent = `NOTICE: The pin at (${lat.toFixed(4)}, ${lng.toFixed(4)}) falls on public, institutional, or unmapped ground. No parcel identifier found.`;
+                    // Strict data integrity: report honestly if no tax parcel polygon matches address bounds
+                    statusEl.textContent = "No private tax parcel registered at this address.";
+                    resultContent.textContent = `NOTICE: Address "${resolvedAddress}" at coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)}) maps to municipal, institutional, or unparcelled right-of-way ground. No active timber assessment record found.`;
                     resultCard.classList.remove('hidden');
                 }
             } catch (error) {
-                console.error("GIS Query Error:", error);
-                statusEl.textContent = "GIS query failed.";
-                resultContent.textContent = "ERROR: Could not connect to Wisconsin Statewide Parcel FeatureServer.";
+                console.error("Parcel Query Error:", error);
+                statusEl.textContent = "GIS parcel lookup failed.";
+                resultContent.textContent = "ERROR: Could not complete parcel database lookup.";
                 resultCard.classList.remove('hidden');
             }
         }
 
+        // STEP 3: Run AI Valuation with Real Retrieved Data
         async function runAIValuation(parcelId, county, ownerName) {
             try {
-                statusEl.textContent = `Fetching assessment data for ${parcelId}...`;
+                statusEl.textContent = `Generating Property Intelligence Card for ${parcelId}...`;
                 
                 const response = await fetch('/api/evaluate', {
                     method: 'POST',

@@ -1,80 +1,104 @@
-export default async function handler(req, res) {
-    res.setHeader('Access-Control-Allow-Credentials', true);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+'use strict';
 
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
+// Phase 1 parcel intelligence. Everything here is fetched or computed in
+// code from public sources; no model is involved.
+//
+//   POST { objectId, parcelId }  ->  ownership, MFL/FCL enrollment, soils,
+//                                    comparable land sales, lead signals
+//
+// Each section succeeds or fails on its own, and a failure is reported as
+// an error for that section, never as "none found".
 
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method not allowed' });
-    }
+const { handleCors } = require('./_lib/origin');
+const { fetchParcel, PARCEL_SVC } = require('./_lib/parcel');
+const { analyzeOwnership } = require('./_lib/ownership');
+const { lookupTaxLaw, TAXLAW_SVC } = require('./_lib/mfl');
+const { lookupSoils, SDA_URL } = require('./_lib/soils');
+const { findComps } = require('./_lib/comps');
 
-    const { parcelId, county, ownerName } = req.body;
+const LEAD_MIN_ACRES = 40;
+const MFL_EXPIRING_YEARS = 5;
 
-    if (!parcelId || parcelId.startsWith("NO_PARCEL")) {
-        return res.status(200).json({ 
-            result: "NOTICE: Selected location is outside private tax parcels (Institutional, Public Land, or Unmapped Right-of-Way). No active forest inventory or timber assessment available for this coordinate." 
-        });
-    }
+const num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v))) ? null : Number(v);
+const settled = (r) => r.status === 'fulfilled' ? { ok: true, ...r.value } : { ok: false, error: r.reason && r.reason.message || String(r.reason) };
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-        return res.status(500).json({ error: 'Server configuration error: GEMINI_API_KEY is missing in Vercel settings.' });
-    }
+function leadSignals(p, ownership, mfl) {
+    const gis = num(p.GISACRES), deed = num(p.DEEDACRES);
+    const acres = gis !== null ? gis : deed;
+    const acresSource = gis !== null ? 'GIS acres' : 'deed acres';
 
-    const systemInstruction = `
-    You are the Kretz Forester Live Cross-Reference Engine. 
-    You must rely strictly on official county assessment structures and 2026 WI DNR Stumpage Rates. Never fabricate, estimate, or invent data. If specific valuation fields or assessment values are missing from the public record, explicitly state 'Data Pending County Update'.
-    
-    Output strictly in this format:
-    PARCEL CROSS-REFERENCE: ${parcelId} | COUNTY: ${county || 'Northwoods Region'}
-    - Owner of Record: ${ownerName || 'Private / Unlisted'}
-    - Assessed Tax Value: [Official Record or 'Pending County Update']
-    - CMA Bare Land Estimate: [Open Market Comp or 'Pending County Update']
-    - Estimated Standing Timber (2026 DNR Rates): [Verified Timber Class or 'Pending County Update']
-    - TOTAL ESTIMATED FMV: [Calculated from verified data or 'Pending County Update']
-    - Quick Insight: [Strict factual assessment based on public attributes]
-    `;
-
-    try {
-        // Configured to use gemini-3.5-flash-lite
-        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                system_instruction: {
-                    parts: [{ text: systemInstruction }]
-                },
-                contents: [{
-                    parts: [{ text: `Cross-reference Parcel ID: ${parcelId} in ${county} County, Owner: ${ownerName}` }]
-                }],
-                generationConfig: {
-                    temperature: 0.0 // Zero temperature to ensure strict factual fidelity
-                }
-            })
-        });
-
-        const data = await geminiRes.json();
-        
-        if (data.error) {
-            console.error("Gemini API Error Detail:", data.error);
-            if (data.error.code === 429) {
-                return res.status(429).json({ error: 'Free tier rate limit reached. Please wait a moment for your quota window to reset.' });
-            }
-            return res.status(500).json({ error: `API Error (${data.error.code}): ${data.error.message}` });
-        }
-
-        if (data.candidates && data.candidates[0].content.parts[0].text) {
-            return res.status(200).json({ result: data.candidates[0].content.parts[0].text });
-        } else {
-            return res.status(500).json({ error: 'Unexpected response structure returned from Gemini API.' });
-        }
-
-    } catch (error) {
-        console.error("Serverless Function Error:", error);
-        return res.status(500).json({ error: 'Server error during cross-reference lookup: ' + error.message });
-    }
+    const criteria = [
+        { key: 'acres', label: `${LEAD_MIN_ACRES}+ acres`,
+          met: acres === null ? null : acres >= LEAD_MIN_ACRES,
+          detail: acres === null ? 'Acreage not on record' : `${acres.toLocaleString('en-US', { maximumFractionDigits: 2 })} ac (${acresSource})` },
+        { key: 'absentee', label: 'Absentee owner',
+          met: ownership.status === 'absentee' ? true : ownership.status === 'resident' ? false : null,
+          detail: ownership.label },
+        { key: 'unenrolled', label: 'Not enrolled in MFL / Forest Crop',
+          met: !mfl.ok ? null : mfl.status === 'none_found',
+          detail: !mfl.ok ? 'Enrollment check failed' : mfl.status === 'enrolled'
+              ? `Enrolled: ${mfl.matched.map(o => o.orderNo).join(', ')}` : 'No enrollment matched this parcel' }
+    ];
+    const expiring = mfl.ok ? mfl.matched.filter(o => o.yearsRemaining !== null && o.yearsRemaining >= 0 && o.yearsRemaining <= MFL_EXPIRING_YEARS) : [];
+    const known = criteria.filter(c => c.met !== null);
+    return {
+        criteria,
+        allCriteriaMet: known.length === criteria.length && known.every(c => c.met),
+        expiringEnrollments: expiring.map(o => ({ orderNo: o.orderNo, expires: o.expires, yearsRemaining: o.yearsRemaining })),
+        note: 'Public records cannot show whether land is actively managed. "Not enrolled" is the closest public proxy.'
+    };
 }
+
+async function handler(req, res) {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!handleCors(req, res)) return;
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed.' });
+
+    let body = req.body;
+    if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Body must be JSON.' }); }
+    }
+    const objectId = Number(body && body.objectId);
+    const parcelId = body && typeof body.parcelId === 'string' ? body.parcelId : null;
+    if (!Number.isInteger(objectId) || objectId <= 0) {
+        return res.status(400).json({ error: 'Request must include a numeric objectId from the statewide parcel layer.' });
+    }
+
+    let parcel;
+    try {
+        parcel = await fetchParcel(objectId);
+    } catch (e) {
+        return res.status(502).json({ error: e.message });
+    }
+    if (!parcel) return res.status(404).json({ error: `No statewide parcel with OBJECTID ${objectId}.` });
+    const p = parcel.properties;
+    if (parcelId && p.PARCELID && parcelId !== p.PARCELID) {
+        return res.status(409).json({ error: `Parcel mismatch: OBJECTID ${objectId} is ${p.PARCELID}, not ${parcelId}. Reload the parcel.` });
+    }
+
+    const ownership = analyzeOwnership(p);
+    const [mflResult, soilsResult] = await Promise.allSettled([lookupTaxLaw(parcel), lookupSoils(parcel)]);
+    const mfl = settled(mflResult), soils = settled(soilsResult);
+    let comps;
+    try { comps = { ok: true, ...findComps(parcel) }; } catch (e) { comps = { ok: false, error: e.message }; }
+
+    return res.status(200).json({
+        parcel: { objectId, parcelId: p.PARCELID || null, county: p.CONAME || null,
+            gisAcres: num(p.GISACRES), deedAcres: num(p.DEEDACRES), taxRollYear: p.TAXROLLYEAR || null },
+        ownership,
+        mfl,
+        soils,
+        comps,
+        lead: leadSignals(p, ownership, mfl),
+        sources: [
+            { name: 'Wisconsin Statewide Parcel Database (V12, 2026)', url: PARCEL_SVC.replace(/\/query$/, '') },
+            { name: 'WI DNR Tax Law Points (MFL / Forest Crop)', url: TAXLAW_SVC.replace(/\/query$/, '') },
+            { name: 'USDA NRCS Soil Data Access (SSURGO)', url: SDA_URL },
+            { name: 'WI DOR Real Estate Transfer Returns', url: 'https://revenue.wi.gov/Pages/ERETR/data-home.aspx' }
+        ],
+        generatedAt: new Date().toISOString()
+    });
+}
+
+module.exports = handler;
+module.exports.leadSignals = leadSignals;

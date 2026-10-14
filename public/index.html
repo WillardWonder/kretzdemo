@@ -462,7 +462,6 @@ function showParcel(feature, { accuracy = null, others = [], zoom = false } = {}
     fact(dl, 'Net property tax', money2(p.NETPRPTA));
 
     dl = section(c, 'Not available from public records');
-    fact(dl, 'Comparable sales (CMA)', null, 'Not in public records');
     fact(dl, 'Standing timber volume', null, 'Not in public records. Requires field cruise.');
 
     dl = section(c, 'Provenance');
@@ -513,6 +512,7 @@ async function loadIntel(feature, box) {
         box.replaceChildren();
         renderLead(box, data.lead, data.ownership);
         renderMfl(box, data.mfl);
+        renderComps(box, data.comps);
         renderSoils(box, data.soils);
         renderSources(box, data.sources);
     } catch (e) {
@@ -577,6 +577,36 @@ function renderMfl(box, mfl) {
     }
     if (mfl.truncated) box.append(el('div', 'banner warn', 'The DNR service returned only part of the nearby enrollments.'));
     box.append(el('div', 'fine', mfl.method));
+}
+
+const usd = (v) => '$' + Math.round(v).toLocaleString('en-US');
+
+function renderComps(box, comps) {
+    box.append(el('div', 'section', 'Comparable land sales'));
+    if (!comps || !comps.ok) { box.append(el('div', 'banner err', `Comparable sales lookup failed: ${comps ? comps.error : 'no response'}`)); return; }
+    const cov = comps.coverage && comps.coverage.from ? `Sales data loaded: ${comps.coverage.from} to ${comps.coverage.to}.` : '';
+    if (comps.status !== 'ok') { box.append(el('div', 'pending', `${comps.note} ${cov}`)); return; }
+
+    const ppa = comps.pricePerAcre;
+    const dl = el('dl');
+    dl.append(el('dt', null, 'Median price / acre'), el('dd', null, usd(ppa.median)));
+    if (ppa.p25 !== null) dl.append(el('dt', null, 'Middle half'), el('dd', null, `${usd(ppa.p25)} – ${usd(ppa.p75)} / ac`));
+    dl.append(el('dt', null, 'Full range'), el('dd', null, `${usd(ppa.min)} – ${usd(ppa.max)} / ac`));
+    dl.append(el('dt', null, 'Based on'), el('dd', null, `${comps.count} sale${comps.count === 1 ? '' : 's'} within ${comps.radiusMiles} mi${comps.sizeMatched ? ', similar size' : ''}`));
+    box.append(dl);
+    if (comps.count < 5) box.append(el('div', 'banner warn', `Only ${comps.count} comparable sale(s) found. Treat this as thin evidence.`));
+
+    const d = el('details');
+    d.append(el('summary', null, `Show the ${comps.count} sale${comps.count === 1 ? '' : 's'}`));
+    for (const c of comps.comps) {
+        const item = el('div', 'item');
+        item.append(el('div', 'item-title', `${usd(c.pricePerAcre)}/ac · ${c.acres} ac · ${usd(c.price)}`));
+        item.append(el('div', 'item-meta', [c.date, c.municipality, `${c.county} Co.`, `${c.distanceMiles} mi`].filter(Boolean).join(' · ')));
+        item.append(el('div', 'item-meta', [c.use, c.mflAcres ? `${c.mflAcres} ac MFL` : null, c.waterFt ? `${c.waterFt} ft water frontage` : null, c.plss, c.parcel && `parcel ${c.parcel}`].filter(Boolean).join(' · ')));
+        d.append(item);
+    }
+    box.append(d);
+    box.append(el('div', 'fine', `Arm's-length, land-only sales of forest or undeveloped land from WI DOR transfer returns. ${comps.method} ${cov} Market evidence, not an appraisal.`));
 }
 
 function renderSoils(box, soils) {

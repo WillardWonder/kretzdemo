@@ -9,6 +9,7 @@ Mobile field app for Kretz Land Co. foresters. Tap **Use My GPS Location** (or t
   - **Ownership:** absentee check from mailing vs. site address and improvement value.
   - **MFL / Forest Crop:** WI DNR Tax Law Points. Each point marks an enrolled quarter-quarter at its center, so matching is by county parcel number or by the point falling inside the parcel. Enrollments within 300 m that don't match are listed separately as unconfirmed.
   - **Soils:** USDA NRCS Soil Data Access (SSURGO). Map units are clipped to the parcel for acres, and site index is area-weighted per species.
+  - **Comparable land sales:** WI DOR Real Estate Transfer Returns, filtered to arm's-length, land-only sales of forest/undeveloped land (5+ ac). Nearest sales within 15/30/50 mi, preferring parcels 1/4x–4x the subject's size. Shows median, middle-half and full range of $/acre with every sale listed.
   - **Lead signals:** 40+ acres, absentee, not enrolled, plus MFL orders expiring within 5 years.
   - The server re-fetches the parcel by OBJECTID, so all lookups use the authoritative record. Each section fails independently and reports its error.
 - `api/summary.js`: optional "AI field summary". Gemini rewrites the verified record as a few sentences. Any number in its output that isn't in the record causes the summary to be rejected.
@@ -20,6 +21,12 @@ Mobile field app for Kretz Land Co. foresters. Tap **Use My GPS Location** (or t
 - Timber volume and comparable sales are never in the public record and are labeled as such.
 - A failed query shows an error, never "no parcel". A point outside any parcel says so. Nothing is ever substituted.
 - If GPS error reaches neighboring parcels, the card says so and lets you switch.
+
+## Updating comparable sales
+
+1. On the [DOR RETR Historical Data page](https://revenue.wi.gov/Pages/ERETR/data-home.aspx), choose **CSV Report** and download a month.
+2. Run `node scripts/build-comps.js path/to/RETRHistoricalReportYYYYMM.csv` (several files at once is fine). It merges into `data/comps.json` and drops duplicates.
+3. Commit `data/comps.json`. Buyer, seller and address fields are never written.
 
 ## Roadmap
 

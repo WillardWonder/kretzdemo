@@ -4,7 +4,7 @@
 // code from public sources; no model is involved.
 //
 //   POST { objectId, parcelId }  ->  ownership, MFL/FCL enrollment, soils,
-//                                    lead signals, sources
+//                                    comparable land sales, lead signals
 //
 // Each section succeeds or fails on its own, and a failure is reported as
 // an error for that section, never as "none found".
@@ -14,6 +14,7 @@ const { fetchParcel, PARCEL_SVC } = require('./_lib/parcel');
 const { analyzeOwnership } = require('./_lib/ownership');
 const { lookupTaxLaw, TAXLAW_SVC } = require('./_lib/mfl');
 const { lookupSoils, SDA_URL } = require('./_lib/soils');
+const { findComps } = require('./_lib/comps');
 
 const LEAD_MIN_ACRES = 40;
 const MFL_EXPIRING_YEARS = 5;
@@ -78,6 +79,8 @@ async function handler(req, res) {
     const ownership = analyzeOwnership(p);
     const [mflResult, soilsResult] = await Promise.allSettled([lookupTaxLaw(parcel), lookupSoils(parcel)]);
     const mfl = settled(mflResult), soils = settled(soilsResult);
+    let comps;
+    try { comps = { ok: true, ...findComps(parcel) }; } catch (e) { comps = { ok: false, error: e.message }; }
 
     return res.status(200).json({
         parcel: { objectId, parcelId: p.PARCELID || null, county: p.CONAME || null,
@@ -85,11 +88,13 @@ async function handler(req, res) {
         ownership,
         mfl,
         soils,
+        comps,
         lead: leadSignals(p, ownership, mfl),
         sources: [
             { name: 'Wisconsin Statewide Parcel Database (V12, 2026)', url: PARCEL_SVC.replace(/\/query$/, '') },
             { name: 'WI DNR Tax Law Points (MFL / Forest Crop)', url: TAXLAW_SVC.replace(/\/query$/, '') },
-            { name: 'USDA NRCS Soil Data Access (SSURGO)', url: SDA_URL }
+            { name: 'USDA NRCS Soil Data Access (SSURGO)', url: SDA_URL },
+            { name: 'WI DOR Real Estate Transfer Returns', url: 'https://revenue.wi.gov/Pages/ERETR/data-home.aspx' }
         ],
         generatedAt: new Date().toISOString()
     });

@@ -54,15 +54,7 @@
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    
-    <!-- Google Gen AI SDK via ESM CDN -->
-    <script type="module">
-        import { GoogleGenAI } from "https://esm.run/@google/genai";
-
-        // Initialize Gemini (Replace with your actual API key for the demo)
-        const ai = new GoogleGenAI({ apiKey: "YOUR_GEMINI_API_KEY_HERE" });
-
-        // Initialize Map centered on Central Wisconsin (Wausau)
+    <script>
         const map = L.map('map').setView([45.1054, -89.6300], 11);
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -161,36 +153,25 @@
             try {
                 statusEl.textContent = "Running 2026 DNR Stumpage cross-reference...";
                 
-                const systemInstruction = `
-                You are the Kretz Forester Live Cross-Reference Engine. 
-                Rely strictly on official county assessment structures and 2026 WI DNR Stumpage Rates. Do not fabricate or invent data.
-                
-                Output strictly in this format:
-                PARCEL CROSS-REFERENCE: ${parcelId} | COUNTY: ${county}
-                - Owner of Record: ${ownerName}
-                - Assessed Tax Value: [Pull from public record or indicate 'Pending']
-                - CMA Bare Land Estimate: [Calculate based on regional comps]
-                - Estimated Standing Timber (2026 DNR Rates): [Calculate based on soil/forest class]
-                - TOTAL ESTIMATED FMV: [Sum]
-                - Quick Insight: [Analysis based strictly on verified parameters]
-                `;
-
-                const response = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash',
-                    contents: `Cross-reference Parcel ID: ${parcelId} in ${county} County, Owner: ${ownerName}`,
-                    config: {
-                        systemInstruction: systemInstruction,
-                        temperature: 0.1,
-                    }
+                const response = await fetch('/api/evaluate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parcelId, county, ownerName })
                 });
 
-                statusEl.textContent = "Analysis complete.";
-                resultContent.textContent = response.text;
-                resultCard.classList.remove('hidden');
+                const data = await response.json();
+                
+                if (data.result) {
+                    statusEl.textContent = "Analysis complete.";
+                    resultContent.textContent = data.result;
+                    resultCard.classList.remove('hidden');
+                } else {
+                    throw new Error(data.error || "Unknown server error");
+                }
             } catch (error) {
-                console.error("AI Error:", error);
+                console.error("API Error:", error);
                 statusEl.textContent = "Error generating valuation.";
-                resultContent.textContent = "API Error: " + error.message;
+                resultContent.textContent = "Error: " + error.message;
                 resultCard.classList.remove('hidden');
             }
         }

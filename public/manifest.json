@@ -1,15 +1,11 @@
 {
-  "name": "Kretz Field App",
-  "short_name": "Kretz App",
-  "start_url": "/index.html",
+  "name": "Kretz Parcel Scout",
+  "short_name": "Parcel Scout",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#0F172A",
-  "theme_color": "#E2B13C",
+  "theme_color": "#0F172A",
   "icons": [
-    {
-      "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/13/Leaf_icon_15.svg/512px-Leaf_icon_15.svg.png",
-      "sizes": "512x512",
-      "type": "image/png"
-    }
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }

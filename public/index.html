@@ -26,7 +26,11 @@
         <div class="w-full border border-slate-700 rounded-xl overflow-hidden shadow-lg bg-slate-800">
             <div id="map"></div>
         </div>
-        <p class="text-xs text-slate-400 text-center">📍 Drag pin or tap map to load parcel boundary data.</p>
+        
+        <!-- Coordinate Readout Badge -->
+        <div id="coordBadge" class="bg-slate-800 border border-slate-700 rounded-lg p-2 text-center text-xs font-mono text-yellow-400">
+            Pin Coordinates: Waiting for placement...
+        </div>
 
         <!-- Location Buttons -->
         <button id="locateBtn" class="btn-gold w-full py-3 rounded-lg shadow-lg text-sm active:scale-95 transition-transform">
@@ -35,7 +39,7 @@
 
         <!-- Manual Override -->
         <div class="w-full flex gap-2">
-            <input type="text" id="manualParcel" placeholder="Enter Parcel ID (e.g. 037-287-343)" class="flex-grow p-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm focus:outline-none focus:border-yellow-500">
+            <input type="text" id="manualParcel" placeholder="Enter Parcel ID manually" class="flex-grow p-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm focus:outline-none focus:border-yellow-500">
             <button id="manualBtn" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 px-4 rounded-lg text-sm">Go</button>
         </div>
 
@@ -51,7 +55,8 @@
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script>
-        const map = L.map('map').setView([45.1054, -89.6300], 11);
+        // Initialize Map centered on Wausau, Wisconsin default
+        const map = L.map('map').setView([44.9591, -89.6301], 13);
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
@@ -66,22 +71,26 @@
             attribution: 'WI Parcels'
         }).addTo(map);
 
-        const marker = L.marker([45.1054, -89.6300], { draggable: true }).addTo(map);
+        const marker = L.marker([44.9591, -89.6301], { draggable: true }).addTo(map);
 
         const statusEl = document.getElementById('status');
+        const coordBadge = document.getElementById('coordBadge');
         const resultCard = document.getElementById('resultCard');
         const resultContent = document.getElementById('resultContent');
 
-        setTimeout(() => { map.invalidateSize(); }, 200);
+        setTimeout(() => { 
+            map.invalidateSize(); 
+            updatePinPosition(44.9591, -89.6301);
+        }, 200);
 
         map.on('click', function(e) {
             marker.setLatLng(e.latlng);
-            queryLocation(e.latlng.lat, e.latlng.lng);
+            updatePinPosition(e.latlng.lat, e.latlng.lng);
         });
 
         marker.on('dragend', function(event) {
             const position = marker.getLatLng();
-            queryLocation(position.lat, position.lng);
+            updatePinPosition(position.lat, position.lng);
         });
 
         document.getElementById('locateBtn').addEventListener('click', () => {
@@ -89,13 +98,13 @@
                 statusEl.textContent = "Geolocation not supported.";
                 return;
             }
-            statusEl.textContent = "Acquiring GPS...";
+            statusEl.textContent = "Acquiring high-accuracy GPS...";
             navigator.geolocation.getCurrentPosition((position) => {
                 const lat = position.coords.latitude;
                 const lng = position.coords.longitude;
-                map.setView([lat, lng], 15);
+                map.setView([lat, lng], 16);
                 marker.setLatLng([lat, lng]);
-                queryLocation(lat, lng);
+                updatePinPosition(lat, lng);
             }, () => {
                 statusEl.textContent = "Unable to retrieve GPS location.";
             }, { enableHighAccuracy: true });
@@ -104,18 +113,29 @@
         document.getElementById('manualBtn').addEventListener('click', () => {
             const parcelId = document.getElementById('manualParcel').value.trim();
             if (parcelId) {
-                statusEl.textContent = `Analyzing Parcel ${parcelId}...`;
+                statusEl.textContent = `Analyzing Manual Parcel ${parcelId}...`;
                 resultCard.classList.add('hidden');
-                runAIValuation(parcelId, "Manual Search", "Private Landowner");
+                runAIValuation(parcelId, "Marathon County", "Private Landowner");
             }
         });
 
-        async function queryLocation(lat, lng) {
-            statusEl.textContent = "Querying Wisconsin parcel records for this exact coordinate...";
+        function updatePinPosition(lat, lng) {
+            coordBadge.textContent = `Pin Coordinates: (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+            queryParcelFromCoordinates(lat, lng);
+        }
+
+        async function queryParcelFromCoordinates(lat, lng) {
+            statusEl.textContent = "Querying Wisconsin Statewide Parcel GIS for this location...";
             resultCard.classList.add('hidden');
 
-            // Exact point query with 4326 spatial reference
-            const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${lng},${lat}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME,TAXPAYNAME,SITE_ADDR&f=json`;
+            // Small bounding box envelope buffer to ensure point intersection hits parcel polygons accurately
+            const buffer = 0.00015;
+            const xmin = lng - buffer;
+            const ymin = lat - buffer;
+            const xmax = lng + buffer;
+            const ymax = lat + buffer;
+
+            const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${xmin},${ymin},${xmax},${ymax}&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME,TAXPAYNAME,SITE_ADDR&f=json`;
 
             try {
                 const response = await fetch(esriUrl);
@@ -123,28 +143,28 @@
 
                 if (data.features && data.features.length > 0) {
                     const attr = data.features[0].attributes;
-                    const parcelId = attr.PARCELID || "WI-PARCEL-UNKNOWN";
-                    const county = attr.CNTY_NAME || "Wisconsin County";
+                    const parcelId = attr.PARCELID || "UNKNOWN-ID";
+                    const county = attr.CNTY_NAME || "Marathon County";
                     const ownerName = attr.TAXPAYNAME || "Private Landowner";
                     
-                    statusEl.textContent = `Parcel found: ${parcelId}`;
+                    statusEl.textContent = `Identified Parcel ID: ${parcelId} (${county})`;
                     runAIValuation(parcelId, county, ownerName);
                 } else {
-                    // STRICT INTEGRITY: No fake data or cross-county swapping. Report honestly.
-                    statusEl.textContent = "No parcel record at this exact coordinate.";
-                    resultContent.textContent = `NOTICE: Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)}) fall outside mapped private tax parcels or within a public right-of-way/institutional ground. No synthetic or estimated data generated.`;
+                    statusEl.textContent = "Coordinates outside mapped private tax parcels.";
+                    resultContent.textContent = `NOTICE: The pin at (${lat.toFixed(4)}, ${lng.toFixed(4)}) falls on public, institutional, or unmapped ground. No parcel identifier found.`;
                     resultCard.classList.remove('hidden');
                 }
             } catch (error) {
-                statusEl.textContent = "GIS connection error.";
-                resultContent.textContent = "ERROR: Could not query Wisconsin State GIS feature server.";
+                console.error("GIS Query Error:", error);
+                statusEl.textContent = "GIS query failed.";
+                resultContent.textContent = "ERROR: Could not connect to Wisconsin Statewide Parcel FeatureServer.";
                 resultCard.classList.remove('hidden');
             }
         }
 
         async function runAIValuation(parcelId, county, ownerName) {
             try {
-                statusEl.textContent = `Cross-referencing ${county} assessment records...`;
+                statusEl.textContent = `Fetching assessment data for ${parcelId}...`;
                 
                 const response = await fetch('/api/evaluate', {
                     method: 'POST',

@@ -6,35 +6,35 @@
     <title>Kretz Field App</title>
     <link rel="manifest" href="/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Leaflet CSS for Map -->
+    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { background-color: #0F172A; color: #F8FAFC; font-family: system-ui, -apple-system, sans-serif; }
         .kretz-gold { color: #E2B13C; }
         .btn-gold { background-color: #E2B13C; color: #0F172A; font-weight: bold; }
-        #map { height: 250px; width: 100%; border-radius: 0.75rem; }
+        #map { height: 320px; width: 100%; border-radius: 0.75rem; }
     </style>
 </head>
 <body class="flex flex-col h-screen p-4 overflow-y-auto">
-    <header class="mb-4 mt-2 text-center">
+    <header class="mb-3 mt-1 text-center">
         <h1 class="text-xl font-bold kretz-gold uppercase tracking-wider">Kretz Land Co.</h1>
-        <p class="text-xs text-slate-400">Interactive Field Scout & Valuation</p>
+        <p class="text-xs text-slate-400">Live Field Parcel Scout</p>
     </header>
 
     <main class="flex-grow flex flex-col items-center max-w-md mx-auto w-full pb-6">
         <!-- Interactive Map Container -->
-        <div class="w-full mb-4 border border-slate-700 rounded-xl overflow-hidden shadow-lg">
+        <div class="w-full mb-3 border border-slate-700 rounded-xl overflow-hidden shadow-lg relative">
             <div id="map"></div>
         </div>
-        <p class="text-xs text-slate-400 mb-4 text-center">📍 Drag the pin anywhere on the map to inspect a parcel.</p>
+        <p class="text-xs text-slate-400 mb-3 text-center">📍 Drag pin or tap map to load parcel boundary data.</p>
 
         <!-- Location Buttons -->
-        <button id="locateBtn" class="btn-gold w-full py-3 rounded-lg shadow-lg text-sm mb-4 active:scale-95 transition-transform">
+        <button id="locateBtn" class="btn-gold w-full py-3 rounded-lg shadow-lg text-sm mb-3 active:scale-95 transition-transform">
             🎯 Center on My GPS Location
         </button>
 
         <!-- Manual Override -->
-        <div class="w-full flex gap-2 mb-4">
+        <div class="w-full flex gap-2 mb-3">
             <input type="text" id="manualParcel" placeholder="Or enter Parcel ID manually" class="flex-grow p-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm focus:outline-none focus:border-yellow-500">
             <button id="manualBtn" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 px-4 rounded-lg text-sm">Go</button>
         </div>
@@ -51,22 +51,38 @@
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // Initialize Map centered on Central Wisconsin (Wausau area default)
-        const map = L.map('map').setView([45.1054, -89.6300], 11);
+        // Initialize Map centered on Wausau/Northwoods Region default
+        const map = L.map('map').setView([45.1054, -89.6300], 12);
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // Base OpenStreetMap Layer
+        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '© OpenStreetMap'
         }).addTo(map);
 
-        // Add a Draggable Pin
+        // Wisconsin Statewide Parcels Dynamic Map Overlay (Shows actual parcel lines on the map!)
+        const parcelLayer = L.tileLayer.wms('https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/services/Wisconsin_Statewide_Parcels_DB/MapServer/wms', {
+            layers: '0',
+            format: 'image/png',
+            transparent: true,
+            opacity: 0.7,
+            attribution: 'WI Statewide Parcel Map'
+        }).addTo(map);
+
+        // Draggable Pin
         const marker = L.marker([45.1054, -89.6300], { draggable: true }).addTo(map);
 
         const statusEl = document.getElementById('status');
         const resultCard = document.getElementById('resultCard');
         const resultContent = document.getElementById('resultContent');
 
-        // When pin is dragged and dropped, query that lat/long
+        // When clicking anywhere on the map, move pin and query
+        map.on('click', function(e) {
+            marker.setLatLng(e.latlng);
+            queryLocation(e.latlng.lat, e.latlng.lng);
+        });
+
+        // When pin is dragged and dropped
         marker.on('dragend', function (event) {
             const position = marker.getLatLng();
             queryLocation(position.lat, position.lng);
@@ -78,20 +94,20 @@
                 statusEl.textContent = "Geolocation not supported.";
                 return;
             }
-            statusEl.textContent = "Acquiring GPS...";
+            statusEl.textContent = "Acquiring high-accuracy GPS...";
             navigator.geolocation.getCurrentPosition((position) => {
                 const lat = position.coords.latitude;
                 const lng = position.coords.longitude;
-                map.setView([lat, lng], 15);
+                map.setView([lat, lng], 16);
                 marker.setLatLng([lat, lng]);
                 queryLocation(lat, lng);
             }, () => {
                 statusEl.textContent = "Unable to retrieve your location.";
-            });
+            }, { enableHighAccuracy: true });
         });
 
         document.getElementById('manualBtn').addEventListener('click', () => {
-            const parcelId = document.getElementById('manualParcel').value.trim();
+            const parcelId = document.getElementById('manualParcel'].value.trim();
             if (parcelId) {
                 statusEl.textContent = `Analyzing Parcel ${parcelId}...`;
                 resultCard.classList.add('hidden');
@@ -100,10 +116,11 @@
         });
 
         async function queryLocation(lat, lng) {
-            statusEl.textContent = "Querying state parcel records for dropped pin...";
+            statusEl.textContent = "Querying Wisconsin parcel database...";
             resultCard.classList.add('hidden');
 
-            const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${lng},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME,TAXPAYNAME,SITE_ADDR&f=json`;
+            // Corrected Esri REST geometry query with spatial reference 4326 (GPS lat/lng)
+            const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${lng},${lat}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME,TAXPAYNAME,SITE_ADDR&f=json`;
 
             try {
                 const response = await fetch(esriUrl);
@@ -111,21 +128,20 @@
 
                 if (data.features && data.features.length > 0) {
                     const attr = data.features[0].attributes;
-                    const parcelId = attr.PARCELID;
+                    const parcelId = attr.PARCELID || "WI-PARCEL-UNKNOWN";
                     const county = attr.CNTY_NAME || "Northwoods Region";
                     const ownerName = attr.TAXPAYNAME || "Private Landowner";
                     
-                    statusEl.textContent = `Parcel identified. Running evaluation...`;
+                    statusEl.textContent = `Parcel found: ${parcelId}`;
                     runAIValuation(parcelId, county, ownerName);
                 } else {
-                    // Graceful handling for non-parcel locations (campuses, parks, roads)
-                    statusEl.textContent = "Location is outside private parcel boundaries.";
-                    resultContent.textContent = "NOTICE: The selected pin is on public, institutional, or unmapped land. Move the map pin onto a private woodland parcel to generate timber intelligence.";
+                    statusEl.textContent = "Selected location is outside private tax parcels.";
+                    resultContent.textContent = "NOTICE: The dropped pin is on public land, water, or unmapped right-of-way. Move the pin over a visible parcel boundary line to generate valuation intelligence.";
                     resultCard.classList.remove('hidden');
                 }
             } catch (error) {
-                statusEl.textContent = "GIS lookup failed.";
-                resultContent.textContent = "ERROR: Could not connect to Wisconsin State GIS service.";
+                statusEl.textContent = "GIS connection error.";
+                resultContent.textContent = "ERROR: Could not query Wisconsin State GIS feature server.";
                 resultCard.classList.remove('hidden');
             }
         }

@@ -1,7 +1,6 @@
 {
   "name": "kretz-field-app",
   "version": "1.0.0",
-  "dependencies": {
-    "@google/genai": "latest"
-  }
+  "private": true,
+  "dependencies": {}
 }

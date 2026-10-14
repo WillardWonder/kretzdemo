@@ -7,40 +7,40 @@
     <link rel="manifest" href="/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
     <style>
         body { background-color: #0F172A; color: #F8FAFC; font-family: system-ui, -apple-system, sans-serif; }
         .kretz-gold { color: #E2B13C; }
         .btn-gold { background-color: #E2B13C; color: #0F172A; font-weight: bold; }
-        #map { height: 320px; width: 100%; border-radius: 0.75rem; }
+        #map { height: 300px; width: 100%; border-radius: 0.75rem; z-index: 1; }
     </style>
 </head>
-<body class="flex flex-col h-screen p-4 overflow-y-auto">
-    <header class="mb-3 mt-1 text-center">
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col p-4">
+    <header class="mb-3 text-center">
         <h1 class="text-xl font-bold kretz-gold uppercase tracking-wider">Kretz Land Co.</h1>
         <p class="text-xs text-slate-400">Live Field Parcel Scout</p>
     </header>
 
-    <main class="flex-grow flex flex-col items-center max-w-md mx-auto w-full pb-6">
+    <main class="max-w-md mx-auto w-full flex flex-col gap-4 pb-6">
         <!-- Interactive Map Container -->
-        <div class="w-full mb-3 border border-slate-700 rounded-xl overflow-hidden shadow-lg relative">
+        <div class="w-full border border-slate-700 rounded-xl overflow-hidden shadow-lg bg-slate-800">
             <div id="map"></div>
         </div>
-        <p class="text-xs text-slate-400 mb-3 text-center">📍 Drag pin or tap map to load parcel boundary data.</p>
+        <p class="text-xs text-slate-400 text-center -mt-2">📍 Drag pin or tap map to load parcel boundary data.</p>
 
         <!-- Location Buttons -->
-        <button id="locateBtn" class="btn-gold w-full py-3 rounded-lg shadow-lg text-sm mb-3 active:scale-95 transition-transform">
+        <button id="locateBtn" class="btn-gold w-full py-3 rounded-lg shadow-lg text-sm active:scale-95 transition-transform">
             🎯 Center on My GPS Location
         </button>
 
         <!-- Manual Override -->
-        <div class="w-full flex gap-2 mb-3">
+        <div class="w-full flex gap-2">
             <input type="text" id="manualParcel" placeholder="Or enter Parcel ID manually" class="flex-grow p-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm focus:outline-none focus:border-yellow-500">
             <button id="manualBtn" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 px-4 rounded-lg text-sm">Go</button>
         </div>
 
         <!-- Status & Results -->
-        <div id="status" class="text-slate-400 text-xs mb-3 h-5 text-center"></div>
+        <div id="status" class="text-slate-400 text-xs text-center h-4"></div>
         
         <div id="resultCard" class="hidden w-full bg-slate-800 border border-slate-700 rounded-xl p-4 shadow-2xl">
             <h2 class="text-xs font-bold text-slate-400 mb-2 uppercase border-b border-slate-700 pb-2">Property Intelligence Card</h2>
@@ -49,24 +49,24 @@
     </main>
 
     <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script>
-        // Initialize Map centered on Wausau/Northwoods Region default
-        const map = L.map('map').setView([45.1054, -89.6300], 12);
+        // Initialize Map centered on Central Wisconsin (Wausau)
+        const map = L.map('map').setView([45.1054, -89.6300], 11);
 
         // Base OpenStreetMap Layer
-        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '© OpenStreetMap'
         }).addTo(map);
 
-        // Wisconsin Statewide Parcels Dynamic Map Overlay (Shows actual parcel lines on the map!)
-        const parcelLayer = L.tileLayer.wms('https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/services/Wisconsin_Statewide_Parcels_DB/MapServer/wms', {
+        // Wisconsin Statewide Parcels WMS Overlay
+        L.tileLayer.wms('https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/services/Wisconsin_Statewide_Parcels_DB/MapServer/wms', {
             layers: '0',
             format: 'image/png',
             transparent: true,
             opacity: 0.7,
-            attribution: 'WI Statewide Parcel Map'
+            attribution: 'WI Parcels'
         }).addTo(map);
 
         // Draggable Pin
@@ -76,14 +76,17 @@
         const resultCard = document.getElementById('resultCard');
         const resultContent = document.getElementById('resultContent');
 
-        // When clicking anywhere on the map, move pin and query
+        // Force Leaflet to calculate size correctly after load
+        setTimeout(() => { map.invalidateSize(); }, 200);
+
+        // Map Click Event
         map.on('click', function(e) {
             marker.setLatLng(e.latlng);
             queryLocation(e.latlng.lat, e.latlng.lng);
         });
 
-        // When pin is dragged and dropped
-        marker.on('dragend', function (event) {
+        // Pin Drag End Event
+        marker.on('dragend', function(event) {
             const position = marker.getLatLng();
             queryLocation(position.lat, position.lng);
         });
@@ -94,20 +97,20 @@
                 statusEl.textContent = "Geolocation not supported.";
                 return;
             }
-            statusEl.textContent = "Acquiring high-accuracy GPS...";
+            statusEl.textContent = "Acquiring GPS...";
             navigator.geolocation.getCurrentPosition((position) => {
                 const lat = position.coords.latitude;
                 const lng = position.coords.longitude;
-                map.setView([lat, lng], 16);
+                map.setView([lat, lng], 15);
                 marker.setLatLng([lat, lng]);
                 queryLocation(lat, lng);
             }, () => {
-                statusEl.textContent = "Unable to retrieve your location.";
+                statusEl.textContent = "Unable to retrieve GPS location.";
             }, { enableHighAccuracy: true });
         });
 
         document.getElementById('manualBtn').addEventListener('click', () => {
-            const parcelId = document.getElementById('manualParcel'].value.trim();
+            const parcelId = document.getElementById('manualParcel').value.trim();
             if (parcelId) {
                 statusEl.textContent = `Analyzing Parcel ${parcelId}...`;
                 resultCard.classList.add('hidden');
@@ -116,10 +119,9 @@
         });
 
         async function queryLocation(lat, lng) {
-            statusEl.textContent = "Querying Wisconsin parcel database...";
+            statusEl.textContent = "Querying Wisconsin parcel records...";
             resultCard.classList.add('hidden');
 
-            // Corrected Esri REST geometry query with spatial reference 4326 (GPS lat/lng)
             const esriUrl = `https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels_DB/FeatureServer/0/query?geometry=${lng},${lat}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=PARCELID,CNTY_NAME,TAXPAYNAME,SITE_ADDR&f=json`;
 
             try {

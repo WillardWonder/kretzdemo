@@ -61,6 +61,16 @@
         .ai { white-space: pre-wrap; font-size: 14px; }
         .fine { font-size: 12px; color: var(--muted); margin-top: 6px; }
         .hidden { display: none !important; }
+        .sig { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; margin: 6px 0; }
+        .sig-icon { font-weight: 700; text-align: center; }
+        .sig-yes { color: #4ADE80; } .sig-no { color: var(--muted); } .sig-unk { color: var(--warn); }
+        .sig-detail { grid-column: 2; font-size: 13px; color: var(--muted); }
+        .item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: var(--bg); }
+        .item-title { font-weight: 600; }
+        .item-meta { font-size: 13px; color: var(--muted); }
+        .loading { color: var(--muted); font-size: 13px; padding: 10px 0; }
+        details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 8px; }
+        a { color: var(--sel); }
     </style>
 </head>
 <body>
@@ -399,6 +409,11 @@ function showParcel(feature, { accuracy = null, others = [], zoom = false } = {}
         c.append(el('div', 'banner info', `Public ownership: auxiliary class ${p.AUXCLASS} (${aux.filter(a => AUX_CLASS[a]).map(a => AUX_CLASS[a]).join(', ')}). Tax-exempt, so assessed values are typically blank or zero.`));
     }
 
+    // Lead signals, MFL and soils, fetched server-side from public sources.
+    const intel = el('div');
+    c.append(intel);
+    loadIntel(feature, intel);
+
     let dl = section(c, 'Ownership');
     fact(dl, 'Owner of record', p.OWNERNME1);
     if (!isBlank(p.OWNERNME2)) fact(dl, 'Second owner', p.OWNERNME2);
@@ -462,6 +477,137 @@ function showError(message) {
     renderNotice('Lookup failed', `The parcel query did not complete, so no parcel information is shown. ${message}`, 'err');
 }
 
+// ---- Parcel intelligence (Phase 1: ownership, MFL, soils) ----------------
+let intelSeq = 0;
+
+async function loadIntel(feature, box) {
+    const seq = ++intelSeq;
+    box.replaceChildren(el('div', 'loading', 'Checking ownership, MFL enrollment and soils…'));
+    const objectId = feature.id ?? feature.properties.OBJECTID;
+    try {
+        const res = await fetch('/api/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ objectId, parcelId: feature.properties.PARCELID || null }) });
+        const data = await res.json().catch(() => ({}));
+        if (seq !== intelSeq) return;
+        if (!res.ok) throw new Error(data.error || `Server returned HTTP ${res.status}.`);
+        box.replaceChildren();
+        renderLead(box, data.lead, data.ownership);
+        renderMfl(box, data.mfl);
+        renderSoils(box, data.soils);
+        renderSources(box, data.sources);
+    } catch (e) {
+        if (seq !== intelSeq) return;
+        box.replaceChildren(el('div', 'banner err', `Ownership / MFL / soils lookup failed. Nothing is shown for these sections. ${e.message}`));
+    }
+}
+
+function signal(parent, met, label, detail) {
+    const row = el('div', 'sig');
+    const [icon, cls] = met === true ? ['✓', 'sig-yes'] : met === false ? ['✗', 'sig-no'] : ['?', 'sig-unk'];
+    row.append(el('div', `sig-icon ${cls}`, icon), el('div', null, label));
+    if (detail) row.append(el('div', 'sig-detail', detail));
+    parent.append(row);
+}
+
+function renderLead(box, lead, ownership) {
+    box.append(el('div', 'section', 'Acquisition lead signals'));
+    for (const c of lead.criteria) signal(box, c.met, c.label, c.detail);
+    if (lead.allCriteriaMet) box.append(el('div', 'banner info', 'Meets all three lead criteria.'));
+    for (const x of lead.expiringEnrollments) {
+        box.append(el('div', 'banner warn', `MFL order ${x.orderNo} expires ${x.expires} (${x.yearsRemaining} yr${x.yearsRemaining === 1 ? '' : 's'}). Expiring enrollments are acquisition opportunities.`));
+    }
+    if (ownership && ownership.reasons && ownership.reasons.length) {
+        box.append(el('div', 'fine', `Owner status: ${ownership.reasons.join(' ')}`));
+    }
+    box.append(el('div', 'fine', lead.note));
+}
+
+function orderItem(o, matched) {
+    const item = el('div', 'item');
+    item.append(el('div', 'item-title', `${o.program || 'Tax law'} order ${o.orderNo || '(no number)'}`));
+    const acres = o.orderAcres || {};
+    const parts = [
+        o.entryYear && `Entered ${o.entryYear}`,
+        o.expires && `Expires ${o.expires}${o.yearsRemaining !== null ? ` (${o.yearsRemaining} yr left)` : ''}`,
+        acres.total !== null && acres.total !== undefined && `Order: ${acres.total} ac (${acres.open ?? 0} open / ${acres.closed ?? 0} closed)`,
+        o.ownerType && `Owner type: ${o.ownerType}`,
+        matched ? `Matched by ${o.match}` : `≈${o.nearestMeters} m from parcel, not confirmed`
+    ].filter(Boolean);
+    item.append(el('div', 'item-meta', parts.join(' · ')));
+    const tracts = o.tracts.filter(t => matched ? t.match : true).slice(0, 4);
+    for (const t of tracts) {
+        item.append(el('div', 'item-meta', `• ${t.description || 'Tract'}${t.acres !== null ? ` · ${t.acres} ac` : ''}${t.access ? ` · ${t.access}` : ''}${t.countyParcelNo ? ` · county parcel ${t.countyParcelNo}` : ''}`));
+    }
+    return item;
+}
+
+function renderMfl(box, mfl) {
+    box.append(el('div', 'section', 'Managed Forest Law / Forest Crop'));
+    if (!mfl.ok) { box.append(el('div', 'banner err', `Enrollment check failed: ${mfl.error}`)); return; }
+    if (mfl.status === 'enrolled') {
+        for (const o of mfl.matched) box.append(orderItem(o, true));
+    } else {
+        box.append(el('div', null, 'No MFL or Forest Crop enrollment matched this parcel.'));
+    }
+    if (mfl.nearby.length) {
+        const d = el('details');
+        d.append(el('summary', null, `${mfl.nearby.length} other enrollment(s) within ${mfl.searchRadiusMeters} m (not confirmed for this parcel)`));
+        for (const o of mfl.nearby) d.append(orderItem(o, false));
+        box.append(d);
+    }
+    if (mfl.truncated) box.append(el('div', 'banner warn', 'The DNR service returned only part of the nearby enrollments.'));
+    box.append(el('div', 'fine', mfl.method));
+}
+
+function renderSoils(box, soils) {
+    box.append(el('div', 'section', 'Soils & site productivity'));
+    if (!soils.ok) { box.append(el('div', 'banner err', `Soils lookup failed: ${soils.error}`)); return; }
+    if (soils.note) box.append(el('div', soils.status === 'none' ? null : 'banner warn', soils.note));
+    if (!soils.units.length) return;
+
+    if (soils.productivity.length) {
+        const dl = el('dl');
+        for (const s of soils.productivity.slice(0, 6)) {
+            dl.append(el('dt', null, s.species || s.symbol || 'Unknown species'));
+            dl.append(el('dd', null, `Site index ${s.siteIndex} · ${s.ratedAcres} ac rated${s.productivityFt3AcYr !== null ? ` · ${s.productivityFt3AcYr} ft³/ac/yr` : ''}`));
+        }
+        box.append(dl);
+        box.append(el('div', 'fine', 'Area-weighted across the soil components rated for each species (SSURGO site index, base age per the listed method).'));
+    } else {
+        box.append(el('div', 'pending', 'No forest productivity ratings published for these soils.'));
+    }
+
+    const d = el('details');
+    d.append(el('summary', null, `${soils.units.length} soil map unit(s)${soils.totalAcres ? ` · ${soils.totalAcres} ac total` : ''}`));
+    for (const u of soils.units) {
+        const item = el('div', 'item');
+        item.append(el('div', 'item-title', `${u.symbol ? u.symbol + ' · ' : ''}${u.name || 'Unnamed map unit'}`));
+        item.append(el('div', 'item-meta', [
+            u.acres !== null && `${u.acres} ac${u.percentOfParcel !== null ? ` (${u.percentOfParcel}%)` : ''}`,
+            u.drainage && `Drainage: ${u.drainage}`
+        ].filter(Boolean).join(' · ') || 'Area not available'));
+        const majors = u.components.filter(c => c.major);
+        for (const c of majors) {
+            const si = c.siteIndex.map(s => `${s.species || s.symbol} SI ${s.siteIndex}`).join(', ');
+            item.append(el('div', 'item-meta', `• ${c.name}${c.percent !== null ? ` ${c.percent}%` : ''}${si ? ': ' + si : ''}`));
+        }
+        d.append(item);
+    }
+    box.append(d);
+}
+
+function renderSources(box, sources) {
+    if (!sources || !sources.length) return;
+    const f = el('div', 'fine', 'Sources: ');
+    sources.forEach((s, i) => {
+        const a = el('a', null, s.name);
+        a.href = s.url; a.target = '_blank'; a.rel = 'noopener';
+        f.append(a);
+        if (i < sources.length - 1) f.append(document.createTextNode(' · '));
+    });
+    box.append(f);
+}
+
 // ---- AI summary ----------------------------------------------------------
 async function runSummary(p, btn, out) {
     btn.disabled = true;
@@ -470,7 +616,7 @@ async function runSummary(p, btn, out) {
     const parcel = {};
     for (const k of FACT_FIELDS) parcel[k] = k === 'LOADDATE' ? dateText(p[k]) : (p[k] ?? null);
     try {
-        const res = await fetch('/api/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const res = await fetch('/api/summary', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ parcel }) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.summary) throw new Error(data.error || `Server returned HTTP ${res.status}.`);

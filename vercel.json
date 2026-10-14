@@ -1,12 +1,11 @@
 {
   "version": 2,
   "functions": {
-    "api/evaluate.js": {
-      "maxDuration": 15
-    }
+    "api/evaluate.js": { "maxDuration": 30 },
+    "api/summary.js": { "maxDuration": 15 }
   },
   "routes": [
-    { "src": "/api/evaluate", "dest": "/api/evaluate.js" },
+    { "src": "/api/(evaluate|summary)", "dest": "/api/$1.js" },
     { "src": "/(.*)", "dest": "/public/$1" }
   ]
 }

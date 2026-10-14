@@ -40,8 +40,8 @@ export default async function handler(req, res) {
     `;
 
     try {
-        // Updated to gemini-3.8-flash endpoint
-        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`, {
+        // Switched to gemini-2.5-flash for stable, high-availability production routing
+        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

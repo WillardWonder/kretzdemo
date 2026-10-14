@@ -7,7 +7,6 @@ export default async function handler(req, res) {
 
     const { parcelId, county, ownerName } = req.body;
 
-    // Handle non-parcel or public/institutional areas gracefully (No hallucination)
     if (!parcelId || parcelId.startsWith("NO_PARCEL")) {
         return res.status(200).json({ 
             result: "NOTICE: Selected location is outside private tax parcels (Institutional, Public Land, or Unmapped Right-of-Way). No active forest inventory or timber assessment available for this coordinate." 
@@ -36,7 +35,7 @@ export default async function handler(req, res) {
             contents: `Cross-reference Parcel ID: ${parcelId} in ${county} County, Owner: ${ownerName}`,
             config: {
                 systemInstruction: systemInstruction,
-                temperature: 0.1, // Near zero to eliminate variance and ensure strict adherence to facts
+                temperature: 0.1,
             }
         });
 
